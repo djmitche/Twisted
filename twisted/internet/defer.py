@@ -805,16 +805,20 @@ def _parseDListResult(l, fireOnOneErrback=False):
 
 
 
-def gatherResults(deferredList):
+def gatherResults(deferredList, consumeErrors=False):
     """
     Returns list with result of given L{Deferred}s.
 
-    This builds on L{DeferredList} but is useful since you don't
-    need to parse the result for success/failure.
+    This builds on L{DeferredList} but is useful since you don't need to parse
+    the result for success/failure.  If the L{Deferreds} in C{deferredList} are
+    not further protected from failure, then pass C{consumeErrors=True} and
+    handle the failures in the L{Deferred} returned from L{gatherResults}.
 
     @type deferredList:  C{list} of L{Deferred}s
+    @param consumeErrors: passed to L{DeferredList.__init__}
     """
-    d = DeferredList(deferredList, fireOnOneErrback=True)
+    d = DeferredList(deferredList, fireOnOneErrback=True,
+                                   consumeErrors=consumeErrors)
     d.addCallback(_parseDListResult)
     return d
 

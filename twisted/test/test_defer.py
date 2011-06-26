@@ -320,6 +320,13 @@ class DeferredTestCase(unittest.TestCase):
         dl[1].addErrback(lambda e: 1)
 
 
+    def testGatherResultsWithConsumeErrors(self):
+        # test successful list of deferreds
+        d = defer.gatherResults([defer.succeed(1)], consumeErrors=True)
+        self.assertEqual(d.consumeErrors, True)
+        return d
+
+
     def test_maybeDeferredSync(self):
         """
         L{defer.maybeDeferred} should retrieve the result of a synchronous
