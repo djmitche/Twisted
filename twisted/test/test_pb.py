@@ -11,7 +11,7 @@ only specific tests for old API.
 # issue1195 TODOs: replace pump.pump() with something involving Deferreds.
 # Clean up warning suppression.
 
-import sys, os, time, gc
+import sys, os, time, gc, weakref
 
 from cStringIO import StringIO
 from zope.interface import implements, Interface
@@ -23,6 +23,7 @@ from twisted.internet import protocol, main, reactor
 from twisted.internet.error import ConnectionRefusedError
 from twisted.internet.defer import Deferred, gatherResults, succeed
 from twisted.protocols.policies import WrappingFactory
+from twisted.protocols import loopback
 from twisted.python import failure, log
 from twisted.cred.error import UnauthorizedLogin, UnhandledCredentials
 from twisted.cred import portal, checkers, credentials
@@ -1115,6 +1116,75 @@ class MyView(pb.Viewable):
     def view_check(self, user):
         return isinstance(user, MyPerspective)
 
+
+
+class LeakyRealm(TestRealm):
+    """
+    A realm which hangs onto a reference to the mind object in its logout
+    function.
+    """
+    def __init__(self, testcase, logoutDeferred):
+        self.testcase = testcase
+        self.logoutDeferred = logoutDeferred
+
+
+    def requestAvatar(self, avatarId, mind, interface):
+        self.testcase.mindRef = weakref.ref(mind)
+        persp = self.perspectiveFactory(avatarId)
+        persp.logoutDeferred = self.logoutDeferred
+        return (pb.IPerspective, persp, lambda : (mind, persp.logout()))
+
+
+
+class NewCredLeakTests(unittest.TestCase):
+    """
+    Tests to try to trigger memory leaks.
+    """
+    def test_logoutLeak(self):
+        """
+        Test that the server does not leak a reference when the client
+        disconnects suddenly.  This leak occurs because the logout function
+        maintains a reference to the perspective, which maintains a reference
+        to the logout function.
+        """
+        # the function calls here ensure that various intermediary objects
+        # aren't left in local variables, which would keep refs around, making
+        # it hard to test a refleak
+        def makeServer():
+            d = Deferred()
+            realm = LeakyRealm(self, d)
+            prtl = portal.Portal(realm)
+            prtl.registerChecker(
+                checkers.InMemoryUsernamePasswordDatabaseDontUse(u='p'))
+            factory = ConnectionNotifyServerFactory(prtl)
+            serverBroker = factory.buildProtocol(("99.99.99.99", ))
+            return serverBroker
+        serverBroker = makeServer()
+
+        clientBroker = pb.Broker(isClient=1)
+
+        closed_d = loopback.loopbackAsync(clientBroker, serverBroker)
+
+        # log in from the client
+        root = clientBroker.remoteForName("root")
+        d = root.callRemote("login", 'u')
+        def cbResponse((challenge, challenger)):
+            mind = SimpleRemote()
+            return challenger.callRemote("respond",
+                    pb.respond(challenge, 'p'), mind)
+        d.addCallback(cbResponse)
+        def connectionLost(_):
+            serverBroker.connectionLost(failure.Failure(RuntimeError("boom")))
+        d.addCallback(connectionLost)
+
+        def check(_):
+            # and check for lingering references - requestAvatar sets mindRef
+            # to a weakref to the mind; this object should be gc'd, and thus
+            # the ref should return None
+            gc.collect()
+            self.assertEqual(self.mindRef(), None)
+        closed_d.addCallback(check)
+        return gatherResults([ closed_d, d ])
 
 
 class NewCredTestCase(unittest.TestCase):
